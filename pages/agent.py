@@ -1,12 +1,16 @@
+from typing import Any
+
 import streamlit as st
 from dotenv import load_dotenv
 from langchain import hub
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.callbacks import collect_runs
+from langchain.memory import ConversationBufferMemory
+from langchain_community.callbacks import StreamlitCallbackHandler
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
-from langchain_community.retrievers import TavilySearchAPIRetriever
-from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import Runnable, RunnablePassthrough
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from langsmith import Client
 from streamlit_feedback import streamlit_feedback  # type: ignore[import-untyped]
@@ -16,26 +20,22 @@ APP_NAME = "langsmith-demo"
 load_dotenv()
 
 
-def format_docs(docs: list[Document]) -> str:
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
-def create_retrieval_qa_chain() -> Runnable[str, str]:
-    retriever = TavilySearchAPIRetriever(k=3)
+def create_agent_chain(
+    history: BaseChatMessageHistory,
+) -> Runnable[dict[str, Any], dict[str, Any]]:
     model = ChatOpenAI(name="gpt-3.5-turbo-0125", temperature=0)
-    prompt = hub.pull("rlm/rag-prompt")
+    tools = [TavilySearchResults()]
+    prompt = hub.pull("hwchase17/openai-tools-agent")
+    agent = create_tool_calling_agent(model, tools, prompt)
 
-    chain: Runnable[str, str] = (
-        {
-            "context": retriever | format_docs,
-            "question": RunnablePassthrough(),
-        }
-        | prompt
-        | model
-        | StrOutputParser()
+    memory = ConversationBufferMemory(
+        chat_memory=history,
+        memory_key="chat_history",
+        return_messages=True,
     )
+    agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory)  # type: ignore[arg-type]
 
-    return chain.with_config({"run_name": "retrieval_qa"})
+    return agent_executor.with_config({"run_name": "agent"})
 
 
 st.title(APP_NAME)
@@ -45,24 +45,27 @@ history = StreamlitChatMessageHistory()
 for message in history.messages:
     st.chat_message(message.type).write(message.content)
 
-question = st.chat_input("Ask me a question!")
+prompt = st.chat_input("What's up?")
 
-if question:
+if prompt:
     with st.chat_message("user"):
-        st.markdown(question)
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        chain = create_retrieval_qa_chain()
+        callback = StreamlitCallbackHandler(st.container())
+
+        agent_chain = create_agent_chain(history)
 
         with collect_runs() as cb:
-            stream = chain.stream(question)
-            response = st.write_stream(stream)
+            response = agent_chain.invoke(
+                {"input": prompt},
+                {"callbacks": [callback]},
+            )
 
             run_id = cb.traced_runs[0].id
             st.session_state.latest_run_id = run_id
 
-        history.add_user_message(question)
-        history.add_ai_message(response)  # type: ignore[arg-type]
+        st.markdown(response["output"])
 
 if st.session_state.get("latest_run_id"):
     run_id = st.session_state.latest_run_id
