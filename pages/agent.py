@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -35,10 +36,18 @@ def create_agent_chain(
     )
     agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory)  # type: ignore[arg-type]
 
-    return agent_executor.with_config({"run_name": "agent"})
+    return agent_executor.with_config(
+        {
+            "run_name": "agent",
+            "metadata": {"conversation_id": st.session_state.conversation_id},
+        },
+    )
 
 
 st.title(APP_NAME)
+
+if not st.session_state.get("conversation_id"):
+    st.session_state.conversation_id = uuid4()
 
 history = StreamlitChatMessageHistory()
 
