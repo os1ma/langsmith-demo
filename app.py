@@ -10,6 +10,8 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
+APP_NAME = "langsmith-demo"
+
 
 def create_agent_chain(history):
     chat = ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0)
@@ -23,10 +25,13 @@ def create_agent_chain(history):
     )
 
     agent = create_tool_calling_agent(chat, tools, prompt)
-    return AgentExecutor(agent=agent, tools=tools, memory=memory)
+
+    agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory)
+
+    return agent_executor.with_config({"run_name": APP_NAME})
 
 
-st.title("langsmith-demo")
+st.title(APP_NAME)
 
 history = StreamlitChatMessageHistory()
 
